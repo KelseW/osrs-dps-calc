@@ -166,6 +166,9 @@ def main():
         # Degraded variants
         elif re.match(r"^(Broken|0|25|50|75|100)$", item['version']):
             handle_base_variant(all_items, item, item['name'], ['Undamaged'])
+        # Used variants (Moons of Peril items)
+        elif re.match(r"^(New|Used)$", item['version']):
+            handle_base_variant(all_items, item, item['name'], ['New'])
         # Dark Bow variants
         elif item['name'] == "Dark bow" and item['version'] != "Regular":
             handle_base_variant(all_items, item, item['name'], ['Regular'])
