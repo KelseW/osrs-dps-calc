@@ -22,7 +22,6 @@ import {
   BA_ATTACKER_MONSTERS,
   CAST_STANCES,
   DEFAULT_ATTACK_SPEED,
-  FLAT_ARMOUR,
   GLOWING_CRYSTAL_IDS,
   GUARDIAN_IDS,
   HUEYCOATL_PHASE_IDS,
@@ -55,7 +54,13 @@ import { range, some, sum } from 'd3-array';
 import { FeatureStatus } from '@/utils';
 import UserIssueType from '@/enums/UserIssueType';
 import {
-  BoltContext, diamondBolts, dragonstoneBolts, onyxBolts, opalBolts, pearlBolts, rubyBolts,
+  BoltContext,
+  diamondBolts,
+  dragonstoneBolts,
+  onyxBolts,
+  opalBolts,
+  pearlBolts,
+  rubyBolts,
 } from '@/lib/dists/bolts';
 import { burningClawDoT, burningClawSpec, dClawDist } from '@/lib/dists/claws';
 
@@ -179,8 +184,7 @@ export default class PlayerVsNPCCalc extends BaseCalc {
   private getPlayerMaxMeleeAttackRoll(): number {
     const { style } = this.player;
 
-    const baseLevel: number = this.trackAdd(DetailKey.DAMAGE_LEVEL, this.player.skills.atk, this.player.boosts.atk);
-    let effectiveLevel: number = baseLevel;
+    let effectiveLevel: number = this.trackAdd(DetailKey.DAMAGE_LEVEL, this.player.skills.atk, this.player.boosts.atk);
 
     for (const p of this.getCombatPrayers('factorAccuracy')) {
       effectiveLevel = this.trackFactor(DetailKey.PLAYER_ACCURACY_LEVEL_PRAYER, effectiveLevel, p.factorAccuracy!);
@@ -245,10 +249,15 @@ export default class PlayerVsNPCCalc extends BaseCalc {
       // https://twitter.com/JagexAsh/status/1704107285381787952
       attackRoll = this.trackFactor(DetailKey.PLAYER_ACCURACY_KERIS, attackRoll, [133, 100]);
     }
+    if (this.wearing('Keris partisan of the sun')
+      && TOMBS_OF_AMASCUT_MONSTER_IDS.includes(this.monster.id)
+      && this.monster.inputs.monsterCurrentHp < Math.trunc(this.monster.skills.hp / 4)) {
+      attackRoll = this.trackFactor(DetailKey.PLAYER_ACCURACY_KERIS, attackRoll, [5, 4]);
+    }
     if (this.wearing(['Blisterwood flail', 'Blisterwood sickle']) && isVampyre(mattrs)) {
       attackRoll = this.trackFactor(DetailKey.PLAYER_ACCURACY_VAMPYREBANE, attackRoll, [21, 20]);
     }
-    if (this.isWearingSilverWeapon() && isVampyre(mattrs)) {
+    if (this.isWearingSilverWeapon() && this.wearing("Efaritay's aid") && isVampyre(mattrs)) {
       attackRoll = this.trackFactor(DetailKey.PLAYER_ACCURACY_EFARITAY, attackRoll, [23, 20]); // todo ordering? does this stack multiplicatively with vampyrebane?
     }
 
@@ -1192,12 +1201,9 @@ export default class PlayerVsNPCCalc extends BaseCalc {
     }
 
     if (style === 'ranged' && this.wearing('Dark bow')) {
+      dist = new AttackDistribution([standardHitDist, standardHitDist]);
       if (this.opts.usingSpecialAttack) {
-        // Start with two linear distributions with no min hit, then apply caps
-        dist = new AttackDistribution([HitDistribution.linear(acc, 0, max), HitDistribution.linear(acc, 0, max)]);
         dist = dist.transform(flatLimitTransformer(48, min));
-      } else {
-        dist = new AttackDistribution([standardHitDist, standardHitDist]);
       }
     }
 
@@ -1546,7 +1552,7 @@ export default class PlayerVsNPCCalc extends BaseCalc {
       dist = dist.transform(multiplyTransformer(13, 10));
     }
 
-    const flatArmour = FLAT_ARMOUR[this.monster.id];
+    const flatArmour = this.monster.defensive.flat_armour;
     if (flatArmour) {
       dist = dist.transform(
         flatAddTransformer(-flatArmour, 1),
@@ -1800,7 +1806,7 @@ export default class PlayerVsNPCCalc extends BaseCalc {
     const tickHpsRoot = new Float64Array(h * w);
     const tickHps = range(0, h)
       .map((i) => tickHpsRoot.subarray(w * i, w * (i + 1)));
-    tickHps[1][this.monster.skills.hp] = 1.0;
+    tickHps[1][this.monster.inputs.monsterCurrentHp || this.monster.skills.hp] = 1.0;
 
     // output map, will be converted at the end
     const ttks = new Map<number, number>();
@@ -1809,7 +1815,7 @@ export default class PlayerVsNPCCalc extends BaseCalc {
     let epsilon = 1.0;
 
     // if the hit dist depends on hp, we'll have to recalculate it each time, so cache the results to not repeat work
-    const recalcDistOnHp = PlayerVsNPCCalc.distIsCurrentHpDependent(this.player, this.monster);
+    const recalcDistOnHp = this.distIsCurrentHpDependent(this.player, this.monster);
     const hpHitDists = new Array<DelayedHit[]>(this.monster.skills.hp + 1);
     hpHitDists[this.monster.skills.hp] = playerDist;
     if (recalcDistOnHp) {
@@ -1869,7 +1875,7 @@ export default class PlayerVsNPCCalc extends BaseCalc {
       return baseDist;
     }
 
-    if (!PlayerVsNPCCalc.distIsCurrentHpDependent(this.player, this.monster) || hp === this.monster.inputs.monsterCurrentHp) {
+    if (!this.distIsCurrentHpDependent(this.player, this.monster) || hp === this.monster.inputs.monsterCurrentHp) {
       return baseDist;
     }
 
@@ -1880,6 +1886,13 @@ export default class PlayerVsNPCCalc extends BaseCalc {
       && ['Ruby bolts (e)', 'Ruby dragon bolts (e)'].includes(this.player.equipment.ammo?.name || '')
       && this.monster.inputs.monsterCurrentHp >= 500
       && hp >= 500) {
+      return baseDist;
+    }
+
+    // similarly, only recompute the dist for the yellow keris below 25% hp
+    if (this.wearing('Keris partisan of the sun')
+      && TOMBS_OF_AMASCUT_MONSTER_IDS.includes(this.monster.id)
+      && hp >= Math.trunc(this.monster.skills.hp / 4)) {
       return baseDist;
     }
 
@@ -1916,11 +1929,14 @@ export default class PlayerVsNPCCalc extends BaseCalc {
     return ret;
   }
 
-  public static distIsCurrentHpDependent(loadout: Player, monster: Monster): boolean {
+  public distIsCurrentHpDependent(loadout: Player, monster: Monster): boolean {
     if (monster.name === 'Vardorvis') {
       return true;
     }
-    if (loadout.equipment.weapon?.name.includes('rossbow') && ['Ruby bolts (e)', 'Ruby dragon bolts (e)'].includes(loadout.equipment.ammo?.name || '')) {
+    if (loadout.equipment.weapon?.name.includes('rossbow') && this.wearing(['Ruby bolts (e)', 'Ruby dragon bolts (e)'])) {
+      return true;
+    }
+    if (this.wearing('Keris partisan of the sun') && TOMBS_OF_AMASCUT_MONSTER_IDS.includes(monster.id)) {
       return true;
     }
 
